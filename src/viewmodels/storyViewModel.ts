@@ -7,10 +7,30 @@ import {
   type StoryDocument,
   type StoryScene,
 } from '../models/story';
-import { getStats, getTimelineWarning, orderedScenes, validateName } from '../models/storyRules';
+import {
+  getCharacterDeletionImpact,
+  getClueDeletionImpact,
+  getSceneDeletionImpact,
+  getStats,
+  getTimelineWarning,
+  orderedScenes,
+  removeCharacter,
+  removeClue,
+  removeScene,
+  validateName,
+} from '../models/storyRules';
 import type { StoryRepository } from '../repositories/storyRepository';
 
 export type ViewModelStatus = 'loading' | 'ready' | 'editing' | 'error' | 'completed';
+
+export type DeletionKind = 'character' | 'scene' | 'clue';
+
+export interface PendingDeletion {
+  kind: DeletionKind;
+  id: string;
+  title: string;
+  consequences: string[];
+}
 
 export interface StoryViewState {
   status: ViewModelStatus;
@@ -20,6 +40,7 @@ export interface StoryViewState {
   error: string;
   search: string;
   activeSection: 'overview' | 'characters' | 'clues';
+  pendingDeletion: PendingDeletion | null;
 }
 
 type Listener = () => void;
@@ -33,6 +54,7 @@ export class StoryViewModel {
     error: '',
     search: '',
     activeSection: 'overview',
+    pendingDeletion: null,
   };
   private readonly listeners = new Set<Listener>();
 
@@ -152,6 +174,76 @@ export class StoryViewModel {
     this.setState({ notice: payoffSceneId ? '伏笔关系已建立' : '伏笔已记录，等待回收' });
   }
 
+  requestDeletion(kind: DeletionKind, id: string): void {
+    const story = this.requireStory();
+    let pendingDeletion: PendingDeletion | null = null;
+    if (kind === 'character') {
+      const impact = getCharacterDeletionImpact(story, id);
+      if (impact) {
+        pendingDeletion = {
+          kind,
+          id,
+          title: `人物「${impact.character.name}」`,
+          consequences:
+            impact.sceneTitles.length > 0
+              ? [`将从 ${impact.sceneTitles.length} 幕中移除出场记录：${impact.sceneTitles.join('、')}`]
+              : ['该人物没有出场记录，可安全删除。'],
+        };
+      }
+    } else if (kind === 'scene') {
+      const impact = getSceneDeletionImpact(story, id);
+      if (impact) {
+        const consequences: string[] = [];
+        if (impact.affectedClueTitles.length > 0) {
+          consequences.push(`${impact.affectedClueTitles.length} 条伏笔将转为待处理：${impact.affectedClueTitles.join('、')}`);
+        }
+        if (impact.scene.characterIds.length > 0) {
+          consequences.push(`幕中 ${impact.scene.characterIds.length} 位人物的出场记录将一并移除`);
+        }
+        if (impact.isSelected) {
+          consequences.push(
+            impact.fallbackSceneTitle
+              ? `这是当前正在查看的一幕，删除后将切换到「${impact.fallbackSceneTitle}」`
+              : '这是当前正在查看的一幕，删除后将没有选中场景',
+          );
+        }
+        consequences.push('剩余场景的时间顺序将自动重排');
+        pendingDeletion = { kind, id, title: `场景「${impact.scene.title}」`, consequences };
+      }
+    } else {
+      const impact = getClueDeletionImpact(story, id);
+      if (impact) {
+        pendingDeletion = {
+          kind,
+          id,
+          title: `伏笔「${impact.clue.title}」`,
+          consequences:
+            impact.sceneTitles.length > 0
+              ? [`将同步清除 ${impact.sceneTitles.length} 幕上的伏笔标记：${impact.sceneTitles.join('、')}`]
+              : ['没有场景标记这条伏笔，可安全删除。'],
+        };
+      }
+    }
+    if (pendingDeletion) this.setState({ pendingDeletion });
+  }
+
+  cancelDeletion(): void {
+    this.setState({ pendingDeletion: null });
+  }
+
+  confirmDeletion(): void {
+    const pending = this.state.pendingDeletion;
+    if (!pending) return;
+    if (pending.kind === 'character') {
+      this.updateStory((story) => removeCharacter(story, pending.id));
+    } else if (pending.kind === 'scene') {
+      this.updateStory((story) => removeScene(story, pending.id));
+    } else {
+      this.updateStory((story) => removeClue(story, pending.id));
+    }
+    this.setState({ pendingDeletion: null, notice: `已删除${pending.title}，相关内容已同步清理` });
+  }
+
   completeProject(): void {
     this.updateStory((story) => ({ ...story, status: 'complete' }));
     this.setState({ status: 'completed', notice: '项目已标记为完成，仍可继续编辑' });
@@ -160,7 +252,7 @@ export class StoryViewModel {
   resetProject(): void {
     const story = createStarterStory();
     this.persist(story);
-    this.setState({ status: 'ready', story, stats: getStats(story), notice: '已恢复示例项目', error: '' });
+    this.setState({ status: 'ready', story, stats: getStats(story), notice: '已恢复示例项目', error: '', pendingDeletion: null });
   }
 
   get visibleCharacters(): StoryCharacter[] {

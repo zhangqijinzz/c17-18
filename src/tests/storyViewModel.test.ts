@@ -33,4 +33,35 @@ describe('story view model', () => {
     viewModel.resetProject();
     expect(viewModel.snapshot.story?.id).toBe(createStarterStory().id);
   });
+
+  it('requires confirmation before deleting and cascades cleanup', () => {
+    const viewModel = new StoryViewModel(new LocalStoryRepository(new MemoryStorageService()));
+    viewModel.initialize();
+
+    viewModel.requestDeletion('character', 'character-mira');
+    expect(viewModel.snapshot.pendingDeletion?.title).toBe('人物「米拉」');
+    expect(viewModel.snapshot.pendingDeletion?.consequences.join('')).toContain('旧港口的来信');
+    viewModel.cancelDeletion();
+    expect(viewModel.snapshot.pendingDeletion).toBeNull();
+    expect(viewModel.snapshot.story?.characters).toHaveLength(2);
+
+    viewModel.requestDeletion('character', 'character-mira');
+    viewModel.confirmDeletion();
+    expect(viewModel.snapshot.pendingDeletion).toBeNull();
+    expect(viewModel.snapshot.story?.characters).toHaveLength(1);
+    expect(viewModel.snapshot.story?.scenes.every((scene) => !scene.characterIds.includes('character-mira'))).toBe(true);
+
+    viewModel.requestDeletion('scene', 'scene-old-harbor');
+    expect(viewModel.snapshot.pendingDeletion?.consequences.join('')).toContain('待处理');
+    viewModel.confirmDeletion();
+    const story = viewModel.snapshot.story;
+    expect(story?.scenes.map((scene) => scene.id)).toEqual(['scene-storm']);
+    expect(story?.selectedSceneId).toBe('scene-storm');
+    expect(story?.clues[0].setupSceneId).toBe('');
+
+    viewModel.requestDeletion('clue', 'clue-first-letter');
+    viewModel.confirmDeletion();
+    expect(viewModel.snapshot.story?.clues).toHaveLength(0);
+    expect(viewModel.snapshot.story?.scenes.every((scene) => scene.clueIds.length === 0)).toBe(true);
+  });
 });
