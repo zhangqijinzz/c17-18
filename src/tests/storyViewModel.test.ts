@@ -33,4 +33,42 @@ describe('story view model', () => {
     viewModel.resetProject();
     expect(viewModel.snapshot.story?.id).toBe(createStarterStory().id);
   });
+
+  it('previews deletion impact and only commits after confirmation', () => {
+    const repository = new LocalStoryRepository(new MemoryStorageService());
+    const viewModel = new StoryViewModel(repository);
+    viewModel.initialize();
+    viewModel.requestDelete('character', 'character-mira');
+    expect(viewModel.snapshot.pendingDelete?.name).toBe('米拉');
+    expect(viewModel.snapshot.pendingDelete?.appearanceScenes).toHaveLength(2);
+    viewModel.cancelDelete();
+    expect(viewModel.snapshot.pendingDelete).toBeNull();
+    expect(viewModel.snapshot.story?.characters).toHaveLength(2);
+
+    viewModel.requestDelete('scene', 'scene-old-harbor');
+    viewModel.confirmDelete();
+    const story = viewModel.snapshot.story;
+    expect(story?.scenes.map((scene) => scene.id)).toEqual(['scene-storm']);
+    expect(story?.selectedSceneId).toBe('scene-storm');
+    expect(story?.clues[0].setupSceneId).toBe('');
+    expect(story?.scenes[0].clueIds).toEqual([]);
+    expect(viewModel.snapshot.pendingDelete).toBeNull();
+
+    const restored = new StoryViewModel(repository);
+    restored.initialize();
+    expect(restored.snapshot.story?.scenes).toHaveLength(1);
+  });
+
+  it('repairs dangling references when loading an old project', () => {
+    const storage = new MemoryStorageService();
+    const legacy = createStarterStory();
+    legacy.scenes[0].characterIds.push('character-ghost');
+    legacy.clues[0].setupSceneId = 'scene-ghost';
+    storage.write(JSON.stringify(legacy));
+    const viewModel = new StoryViewModel(new LocalStoryRepository(storage));
+    viewModel.initialize();
+    const harbor = viewModel.snapshot.story?.scenes.find((scene) => scene.id === 'scene-old-harbor');
+    expect(harbor?.characterIds).not.toContain('character-ghost');
+    expect(viewModel.snapshot.story?.clues[0].setupSceneId).toBe('');
+  });
 });

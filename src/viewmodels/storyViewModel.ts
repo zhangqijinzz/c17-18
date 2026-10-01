@@ -7,7 +7,7 @@ import {
   type StoryDocument,
   type StoryScene,
 } from '../models/story';
-import { getStats, getTimelineWarning, orderedScenes, validateName } from '../models/storyRules';
+import { getStats, getTimelineWarning, orderedScenes, validateName, deleteCharacter, deleteClue, deleteScene, getDeleteImpact, type DeleteImpact, type DeleteTarget } from '../models/storyRules';
 import type { StoryRepository } from '../repositories/storyRepository';
 
 export type ViewModelStatus = 'loading' | 'ready' | 'editing' | 'error' | 'completed';
@@ -20,6 +20,7 @@ export interface StoryViewState {
   error: string;
   search: string;
   activeSection: 'overview' | 'characters' | 'clues';
+  pendingDelete: DeleteImpact | null;
 }
 
 type Listener = () => void;
@@ -33,6 +34,7 @@ export class StoryViewModel {
     error: '',
     search: '',
     activeSection: 'overview',
+    pendingDelete: null,
   };
   private readonly listeners = new Set<Listener>();
 
@@ -133,6 +135,32 @@ export class StoryViewModel {
     this.setState({ notice: '时间线顺序已更新' });
   }
 
+  /** 删除前先打开确认面板，让作者看清会波及哪些内容。 */
+  requestDelete(target: DeleteTarget, id: string): void {
+    const impact = getDeleteImpact(this.requireStory(), target, id);
+    if (impact) this.setState({ pendingDelete: impact });
+  }
+
+  cancelDelete(): void {
+    this.setState({ pendingDelete: null });
+  }
+
+  confirmDelete(): void {
+    const pending = this.state.pendingDelete;
+    if (!pending) return;
+    if (pending.target === 'character') {
+      this.updateStory((story) => deleteCharacter(story, pending.id));
+      this.setState({ notice: `已删除人物「${pending.name}」，相关出场记录已一并移除` });
+    } else if (pending.target === 'scene') {
+      this.updateStory((story) => deleteScene(story, pending.id));
+      this.setState({ notice: `已删除场景「${pending.name}」，关联伏笔已转为待处理` });
+    } else {
+      this.updateStory((story) => deleteClue(story, pending.id));
+      this.setState({ notice: `已删除伏笔「${pending.name}」，场景上的标记已清除` });
+    }
+    this.setState({ pendingDelete: null });
+  }
+
   addClue(title: string, setupSceneId: string, payoffSceneId: string): void {
     const cleanTitle = validateName(title);
     if (cleanTitle === '至少输入 2 个字') {
@@ -160,7 +188,7 @@ export class StoryViewModel {
   resetProject(): void {
     const story = createStarterStory();
     this.persist(story);
-    this.setState({ status: 'ready', story, stats: getStats(story), notice: '已恢复示例项目', error: '' });
+    this.setState({ status: 'ready', story, stats: getStats(story), notice: '已恢复示例项目', error: '', pendingDelete: null });
   }
 
   get visibleCharacters(): StoryCharacter[] {

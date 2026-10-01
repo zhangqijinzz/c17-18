@@ -1,5 +1,5 @@
 import { createStarterStory, type StoryDocument } from '../models/story';
-import { sanitizeStory } from '../models/storyRules';
+import { normalizeStory, sanitizeStory } from '../models/storyRules';
 import type { StorageService } from '../services/storageService';
 
 export interface StoryRepository {
@@ -14,7 +14,8 @@ export class LocalStoryRepository implements StoryRepository {
     const raw = this.storage.read();
     if (!raw) return createStarterStory();
     try {
-      return sanitizeStory(JSON.parse(raw)) ?? createStarterStory();
+      const story = sanitizeStory(JSON.parse(raw));
+      return story ? normalizeStory(story) : createStarterStory();
     } catch {
       return createStarterStory();
     }
